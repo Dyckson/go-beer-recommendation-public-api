@@ -1,0 +1,77 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  database:
+    image: postgres:16
+    container_name: beer_database
+    environment:
+      POSTGRES_USER: beeruser
+      POSTGRES_PASSWORD: beerpass
+      POSTGRES_DB: beerdb
+    ports:
+      - "55432:5432"
+    volumes:
+      - beer_data:/var/lib/postgresql/data
+      - ./internal/storage/database/migrations:/docker-entrypoint-initdb.d
+    networks:
+      - beer_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U beeruser -d beerdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache for Spotify Tokens
+  redis:
+    image: redis:7-alpine
+    container_name: beer_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - beer_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # Backend API
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: beer_api
+    environment:
+      # Database connection
+      DATABASE_URL: postgres://beeruser:beerpass@database:5432/beerdb?sslmode=disable
+      
+      # Redis connection for Spotify token caching
+      REDIS_URL: redis:6379
+      
+      # Spotify API credentials
+      SPOTIFY_CLIENT_ID: 80e0a65a3d914670bce662856941d04e
+      SPOTIFY_CLIENT_SECRET: 79bdf821f47c40b0ad02567f3728419f
+      
+      # Server configuration
+      PORT: 1112
+      GIN_MODE: release
+    ports:
+      - "1112:1112"
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - beer_network
+    restart: unless-stopped
+
+volumes:
+  beer_data:
+    driver: local
+
+networks:
+  beer_network:
+    driver: bridge
