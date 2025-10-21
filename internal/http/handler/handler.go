@@ -3,7 +3,6 @@ package handler
 import (
 	"backend-test/internal/http/controller"
 	"backend-test/internal/service"
-	postgres "backend-test/internal/storage/database"
 	"backend-test/internal/storage/repository"
 
 	"github.com/gin-gonic/gin"
@@ -42,37 +41,4 @@ func HandleRequests(router *gin.Engine) {
 
 	recommendations := api.Group("/recommendations")
 	recommendations.POST("/suggest", recommendationController.SuggestSpotifyPlaylist)
-
-	spotify := api.Group("/spotify")
-	spotify.GET("/status", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"message":       "Spotify Redis-based token management is active",
-			"info":          "Tokens are cached in Redis with automatic expiration",
-			"cache_backend": "Redis",
-			"token_ttl":     "55 minutes",
-			"fallback":      "In-memory if Redis unavailable",
-		})
-	})
-
-	redis := api.Group("/redis")
-	redis.GET("/status", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"redis_enabled": true,
-			"redis_url":     "redis:6379",
-			"purpose":       "Spotify token caching",
-			"ttl":           "1 hour",
-			"fallback":      "Available if Redis fails",
-		})
-	})
-
-	db := api.Group("/db")
-	db.GET("/stats", func(c *gin.Context) {
-		stats := postgres.GetDBStats()
-		c.JSON(200, gin.H{
-			"database":          stats,
-			"cost_optimization": "80% reduction with connection pool",
-			"connections_saved": "Up to 90% less than unlimited pool",
-			"production_impact": "$200-300/month savings vs unoptimized",
-		})
-	})
 }
