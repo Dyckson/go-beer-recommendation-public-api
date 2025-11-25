@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	"github.com/joho/godotenv"
+	"golang.org/x/sync/singleflight"
 )
 
 var DATABASE_URL string
@@ -26,7 +27,7 @@ type RedisSpotifyManager struct {
 	clientID     string
 	clientSecret string
 	tokenKey     string
-	mutex        sync.RWMutex
+	sfGroup      singleflight.Group
 }
 
 // 🚀 Singleton instance
@@ -117,6 +118,7 @@ func GetSpotifyService() *spotify.SpotifyService {
 			clientID:     clientID,
 			clientSecret: clientSecret,
 			tokenKey:     "spotify:access_token",
+			sfGroup:      singleflight.Group{},
 		}
 	})
 
@@ -135,28 +137,38 @@ func (rsm *RedisSpotifyManager) GetSpotifyService() *spotify.SpotifyService {
 		return rsm.createSpotifyServiceWithToken(token.AccessToken)
 	}
 
-	log.Println("Creating new Spotify token...")
-	service, err := spotify.NewSpotifyService(rsm.clientID, rsm.clientSecret)
-	if err != nil {
-		log.Printf("Failed to create Spotify service: %v", err)
+	// Use singleflight to ensure only one goroutine refreshes the token
+	ch := rsm.sfGroup.DoChan("refresh", func() (interface{}, error) {
+		log.Println("Creating new Spotify token...")
+		service, err := spotify.NewSpotifyService(rsm.clientID, rsm.clientSecret)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := rsm.saveTokenToRedis(ctx, service); err != nil {
+			log.Printf("Failed to save token to Redis: %v", err)
+		}
+
+		return service, nil
+	})
+
+	res := <-ch
+	if res.Err != nil {
+		log.Printf("Failed to create Spotify service: %v", res.Err)
 		return nil
 	}
 
-	if err := rsm.saveTokenToRedis(ctx, service); err != nil {
-		log.Printf("Failed to save token to Redis: %v", err)
+	if svc, ok := res.Val.(*spotify.SpotifyService); ok {
+		return svc
 	}
 
-	return service
+	return nil
 }
 
 func (rsm *RedisSpotifyManager) getValidTokenFromRedis(ctx context.Context) *SpotifyTokenData {
 	if rsm.redisClient == nil {
 		return nil
 	}
-
-	rsm.mutex.RLock()
-	defer rsm.mutex.RUnlock()
-
 	tokenJSON, err := rsm.redisClient.Get(ctx, rsm.tokenKey).Result()
 	if err != nil {
 		if err != redis.Nil {
@@ -183,10 +195,6 @@ func (rsm *RedisSpotifyManager) saveTokenToRedis(ctx context.Context, service *s
 	if rsm.redisClient == nil {
 		return nil
 	}
-
-	rsm.mutex.Lock()
-	defer rsm.mutex.Unlock()
-
 	tokenData := SpotifyTokenData{
 		AccessToken: "spotify_token_" + time.Now().Format("20060102_150405"),
 		ExpiresAt:   time.Now().Add(50 * time.Minute),
